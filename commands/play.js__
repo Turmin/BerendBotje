@@ -1,0 +1,252 @@
+const discord = require("discord.js");
+client = new discord.Client();
+const { Player } = require("discord-player");
+client.player = new Player(client);
+const {channelids} = require("../config.json");
+// https://github.com/ZerioDev/Music-bot/tree/master/commands/music
+
+client.player.on('trackStart', (message, track) => {
+	return message.channel.send({
+		embed: {
+			color: 'RANDOM',
+			title: 'Nu aan het afspelen',
+			description: track.title,
+			fields: [
+				{ name: 'Auteur', value: track.author, inline: true },
+				{ name: 'Toegevoegd door', value: track.requestedBy.username, inline: true },
+				{ name: 'Duur', value: track.duration, inline: true }
+			],
+			thumbnail: { url: track.thumbnail },
+		},
+	});
+})
+client.player.on('trackAdd', (message, queue, track) => {
+	return message.channel.send({
+		embed: {
+			color: 'RANDOM',
+			title: 'Toegevoegd aan de wachtrij',
+			description: track.title,
+			fields: [
+				{ name: 'Auteur', value: track.author, inline: true },
+				{ name: 'Toegevoegd door', value: track.requestedBy.username, inline: true },
+				{ name: 'Duur', value: track.duration, inline: true },
+			], // { name: '\u200B', value: '\u200B', inline: true },
+			thumbnail: { url: track.thumbnail },
+		},
+	});
+})
+client.player.on('playlistAdd', (message, queue, playlist) => {
+	return message.channel.send(playlist.title + " is toegevoegd aan de wachtrij (" + playlist.tracks.length + " songs)")
+})
+client.player.on('searchResults', (message, query, tracks) => {
+	return message.channel.send({
+		embed: {
+			color: 'RANDOM',
+			fields: [
+				{ name: 'Zoekresultaten voor ' + query, value: tracks.map((t, i) => "**" + parseInt(i+1) + ".** " + t.title.slice(0,40) + (t.title.length > 40 ? '...' : '')) },
+				{ name: '\u200b', value: 'Typ het cijfer van het nummer dat je wilt afspelen\nof typ c of cancel om te annuleren' }
+			],
+			footer:{
+				text: tracks.length + ' nummers gevonden'
+			}
+		},
+	}).catch(err => console.log(err));
+})
+client.player.on('searchInvalidResponse', (message, query, tracks, content, collector) => {
+    if (content === 'cancel' || content === 'c'){
+        collector.stop();
+        return message.channel.send("Zoeken geannuleerd")
+    }
+    return message.channel.send("Typ een getal tussen 1 en " + tracks.length);
+})
+client.player.on('searchCancel', (message, query, tracks) => message.channel.send("Geen geldige reactie ontvangen. Stuur het commando opnieuw"))
+client.player.on('noResults', (message, query) => message.channel.send("Geen resultaten gevonden voor " + query))
+//client.player.on('queueEnd', (message, queue) => message.channel.send("Muziek is gestopt omdat er geen muziek meer in de wachtrij stond"))
+//client.player.on('channelEmpty', (message, queue) => message.channel.send("Muziek is gestopt omdat er geen mensen meer in het spraakkanaal zitten"))
+client.player.on('botDisconnect', (message) => message.channel.send("Muziek is gestopt omdat de verbinding van de bot is verbroken"))
+client.player.on('error', (error, message) => {
+    switch(error){
+        case 'NotPlaying':
+            message.channel.send("Er wordt geen muziek afgespeeld")
+            break;
+        case 'NotConnected':
+            message.channel.send("Je bent niet verbonden met een spraakkanaal")
+            break;
+        case 'UnableToJoin':
+            message.channel.send("Ik heb geen permissies om het spraakkanaal te joinen")
+            break;
+        case 'LiveVideo':
+            message.channel.send("YouTube lives wordt niet ondersteund")
+            break;
+        default:
+            message.channel.send("Er is een fout opgetreden " + error)
+    }
+})
+module.exports = {
+	name: 'play',
+	aliases: ['clear-queue','leave','loop','music','next','nowplaying','pause','queue','resume','search','shuffle','skip','stop','volume'],
+	execute(message, args){
+
+		
+		/*if(message.channel.id !== channelids.BOTCOMMANDS && message.channel.id !== channelids.CODE) {
+		    message.delete();
+	        return message.reply("Graag dit commando alleen gebruiken in <#" + channelids.BOTCOMMANDS + ">").then(msg => {
+                 msg.delete({ timeout: 5000})
+             }).catch(console.error);
+        }*/
+		
+
+		const command = message.content.toLowerCase().split(/ +/).shift();
+		
+		if(command === "music"){
+			return message.channel.send({
+				embed: {
+					color: 'RANDOM',
+					title: "Muziek commando's",
+					description: "Join het friends spraakkanaal voordat je deze commando's kunt uitvoeren",
+					fields: [
+						{ name: '!play <titel>', value: 'Speel een nummer af' },
+						{ name: '!play watch?v=S5PvBzDlZGs', value: 'Speel een nummer af van youtube' },
+						{ name: '!search <titel>', value: 'Zoek een nummer en typ daarna het getal dat je wilt afspelen of cancel om te annuleren' },
+						{ name: '!skip', value: 'Sla het huidige nummer over' },
+						{ name: '!pause', value: 'Pauzeer het huidige nummer' },
+						{ name: '!resume', value: 'Hervat het huidige nummer' },
+						{ name: '!stop', value: 'Stop het afspelen' },
+						{ name: '!loop', value: 'Herhaal het huidige nummer of afspeellijst' },
+						{ name: '!queue', value: 'Bekijk de afspeellijst' },
+						{ name: '!clear-queue', value: 'Wis de afspeellijst' },
+						{ name: '!shuffle', value: 'Shuffle de nummers in de afspeellijst' },
+						{ name: '!volume <1-100>', value: 'Pas het volume aan' },
+						{ name: '!nowplaying', value: 'Bekijk welk nummer wordt afgespeeld' },
+						{ name: '!leave', value: 'Verwijder de bot uit het spraakkanaal' },
+					]
+				},
+			}).catch(err => console.log(err));
+		}
+		else if(command === "leave"){
+			if(!message.guild.me.voice.channel) return message.channel.send("De bot is niet verbonden");
+			client.player.setRepeatMode(message, false);
+			client.player.stop(message);
+			return message.guild.me.voice.channel.leave();
+		}
+
+		if(!message.member.voice.channel) return message.channel.send("Je zit niet in een spraakkanaal");
+		if(message.guild.me.voice.channel && message.guild.me.voice.channel.id != message.member.voice.channel.id) return message.channel.send("Je bent niet met het zelfde spraakkanaal verbonden");
+
+		if(command === "play"){
+			if(!args[0]) return message.channel.send("Typ een titel");
+			return client.player.play(message, args.join(" "), { firstResult: true });
+		}
+		else if(command === "pause"){
+			if (!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			if (client.player.getQueue(message).paused) return message.channel.send("De muziek is al gepauzeerd");
+			client.player.pause(message);
+			return message.channel.send("Nummer is gepauzeerd");
+		}
+		else if(command === "resume"){
+			if (!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			if (!client.player.getQueue(message).paused) return message.channel.send("De muziek speelt al");
+			client.player.resume(message);
+			return message.channel.send("Nummer " + client.player.getQueue(message).playing.title + " hervat");
+		}
+		else if(command === "shuffle"){
+			if (!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			client.player.shuffle(message);
+			return message.channel.send("Wachtrij shuffled " + client.player.getQueue(message).tracks.length + " nummers");
+		}
+		else if(command === "loop"){
+			if (!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			if (args.join(" ").toLowerCase() === 'queue'){
+				if (client.player.getQueue(message).loopMode){
+					client.player.setLoopMode(message, false);
+					return message.channel.send("Herhaal mode uit");
+				} else {
+					client.player.setLoopMode(message, true);
+					return message.channel.send("Herhaal mode aan. De wachtrij wordt oneindig herhaalt");
+				};
+			} else {
+				if (client.player.getQueue(message).repeatMode){
+					client.player.setRepeatMode(message, false);
+					return message.channel.send("Herhaal mode uit");
+				} else {
+					client.player.setRepeatMode(message, true);
+					return message.channel.send("Herhaal mode aan. Het huidige nummer wordt oneindig herhaalt");
+				};
+			};
+		}
+		else if(command === "queue"){
+			const queue = client.player.getQueue(message);
+			if (!client.player.getQueue(message)) return message.channel.send("Er speelt geen muziek");
+
+			return message.channel.send({
+				embed: {
+					color: 'RANDOM',
+					title: client.player.getQueue(message).loopMode ? '(looped)' : 'Afspeellijst',
+					fields: [
+						{ name: 'Nu aan het afspelen', value: queue.playing.title + ' | ' + queue.playing.author},
+						{ name: '\u200b', value: queue.tracks.map((t, i) => '**' + parseInt(i+1) + '** - ' + t.title + ' | ' + t.author + ' (Toegevoegd door: ' + t.requestedBy.username + ')').slice(0, 10).join('\n') },
+					],
+					footer: {
+						text: (queue.tracks.length ? queue.tracks.length : 0) + ' nummers'
+					},
+				},
+			}).catch(err => console.log(err));
+
+		}
+		else if(command === "volume"){
+			if (!args[0] || isNaN(args[0]) || args[0] === 'Infinity') return message.channel.send("Typ een getal tussen 1 en 100");
+			if (Math.round(parseInt(args[0])) < 1 || Math.round(parseInt(args[0])) > 100) return message.channel.send("Typ een getal tussen 1 en 100");
+			client.player.setVolume(message, parseInt(args[0]));
+			return message.channel.send("Volume aangepast naar " + parseInt(args[0]) + "%");
+		}
+		else if(command === "clear-queue"){
+			if (!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			if (client.player.getQueue(message).tracks.length <= 1) return message.channel.send("Er zijn geen nummers in de wachtrij");
+			client.player.clearQueue(message);
+			return message.channel.send("Wachtrij is geleegd");
+		}
+		else if(command === "nowplaying"){
+			if (!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			const track = client.player.nowPlaying(message);
+			const filters = [];
+
+			Object.keys(client.player.getQueue(message).filters).forEach((filterName) => client.player.getQueue(message).filters[filterName]) ? filters.push(filterName) : false;
+
+			return message.channel.send({
+				embed: {
+					color: 'RANDOM',
+					author: { name: track.title },
+					fields: [
+						{ name: 'Auteur', value: track.author, inline: true },
+						{ name: 'Toegevoegd door', value: track.requestedBy.username, inline: true },
+
+						{ name: 'Bekeken', value: track.views, inline: true },
+						{ name: 'Duur', value: track.duration, inline: true },
+						//{ name: 'Filters activated', value: filters.length + '/' + client.filters.length, inline: true },
+
+						{ name: 'Volume', value: client.player.getQueue(message).volume, inline: true },
+						{ name: 'Herhaal', value: client.player.getQueue(message).repeatMode ? 'Ja' : 'Nee', inline: true },
+
+						{ name: 'Voortgang', value: client.player.createProgressBar(message, { timecodes: true }), inline: true }
+					],
+					thumbnail: { url: track.thumbnail },
+				},
+			}).catch(err => console.log(err));
+		}
+		else if(command === "search"){
+			if(!args[0]) return message.channel.send("Typ een titel");
+			return client.player.play(message, args.join(" "));
+		}
+		else if(command === "skip" || command === "next"){
+			if(!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			client.player.skip(message);
+			return message.channel.send("Het huidige nummer is geskipped");
+		}
+		else if(command === "stop"){
+			if(!client.player.getQueue(message)) return message.channel.send("Er wordt geen muziek afgespeeld");
+			client.player.setRepeatMode(message, false);
+			client.player.stop(message);
+			return message.channel.send("Muziek is gestopt");
+		}
+    },
+};

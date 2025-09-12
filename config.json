@@ -1,0 +1,26 @@
+{
+    "servername":"Friends",
+    "token":"Nzk2NDIwMjI2MjM3MjAyNDQy.X_XqIg.5I8SlxwuAx_ywo6tu0Hvs4yNL-A",
+    "prefix":"!",
+    "channelids": {
+        "AREA51_FRIENDS": "795762672992911392",
+        "BOTTESTKANAAL_FRIENDS": "796131586763653172",
+        "BIRTHDAYS_FRIENDS": "795764957442342913",
+        "ALGEMEEN_MICH": "724569054550949891",
+        "LOGS_MICH": "844226732314984448",
+        "TEST_MICH": "724632964729929830",
+        "RULES_MICH": "871401881333792818"
+    },
+    "roles": {
+        "Mute": "871443578235289671",
+        "Lid": "869587698460033024"
+    },
+    "database": {
+        "host___": "51.38.116.122",
+        "host": "de-fsn-node-01.mynode.nl",
+        "user": "u22_v3H4igmgx4",
+        "password": "@L.hc3MQ22COt6yFStaZ^i2G",
+        "database": "s22_database",
+        "timezone": "Z"
+    }
+}
