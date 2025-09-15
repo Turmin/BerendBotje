@@ -1,51 +1,85 @@
-const mysql = require("mysql"); // https://www.npmjs.com/package/mysql (Database)
-const {database} = require("./config.json");
+// Load environment variables
+require('dotenv').config();
+
+const mysql = require("mysql");
 const moment = require("moment");
 const tz = require("moment-timezone");
-const dt = moment().tz('Europe/Amsterdam').format('DD-MM-YYYY HH:mm:ss');
 
-// var con = mysql.createConnection({
-var con = mysql.createPool({
-    connectionLimit : 2,
-    host: database.host,
-    user: database.user,
-    password: database.password,
-    database: database.database,
+// Database config from environment variables
+const dbConfig = {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE,
+    timezone: process.env.DB_TIMEZONE || 'Z',
     dateStrings: true,
-    timezone: database.timezone
-});
+    connectionLimit: 2
+};
 
-function handleDisconnect(con) {
-
-    var con = mysql.createConnection({
-        host: database.host,
-        user: database.user,
-        password: database.password,
-        database: database.database,
-        dateStrings: true,
-        timezone: database.timezone
-    });
-    
-    con.connect(function(err) {              // The server is either down
-        const dt = moment().tz('Europe/Amsterdam').format('DD-MM-YYYY HH:mm:ss');
-        if(err) {                                     // or restarting (takes a while sometimes).
-            console.log("error when connecting to db:", err, dt);
-            setTimeout(handleDisconnect, 10000); // We introduce a delay before attempting to reconnect,
-        } else {                                    // to avoid a hot loop, and to allow our node script to
-            console.log("Connected to database", dt);
-        }
-    });                                     // process asynchronous requests in the meantime.
-                                        // If you're also serving http, display a 503 error.
-    con.on('error', function(err) {
-        console.log("DB error", err);
-        if(err.code) { // Connection to the MySQL server is usually
-            handleDisconnect();                         // lost due to either server restart, or a
-        } else {                                      // connnection idle timeout (the wait_timeout
-            throw err;                                  // server variable configures this)
-        }
-    });
+// Validate required environment variables
+if (!dbConfig.host || !dbConfig.user || !dbConfig.password || !dbConfig.database) {
+    console.error('❌ Missing required database environment variables!');
+    console.error('Required: DB_HOST, DB_USER, DB_PASSWORD, DB_DATABASE');
+    process.exit(1);
 }
 
-handleDisconnect(con);
+console.log('📊 Database config loaded from environment variables');
+
+// Create connection pool
+const con = mysql.createPool(dbConfig);
+
+function handleDisconnect() {
+    const singleConnection = mysql.createConnection({
+        host: dbConfig.host,
+        user: dbConfig.user,
+        password: dbConfig.password,
+        database: dbConfig.database,
+        dateStrings: true,
+        timezone: dbConfig.timezone
+    });
+    
+    singleConnection.connect(function(err) {
+        const dt = moment().tz('Europe/Amsterdam').format('DD-MM-YYYY HH:mm:ss');
+        if(err) {
+            console.error("❌ Database connection error:", err.code, dt);
+            setTimeout(handleDisconnect, 10000); // Retry after 10 seconds
+        } else {
+            console.log("✅ Connected to database", dt);
+        }
+    });
+    
+    singleConnection.on('error', function(err) {
+        console.error("❌ Database error:", err.code || err.message);
+        if(err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
+            console.log("🔄 Attempting to reconnect to database...");
+            handleDisconnect();
+        } else {
+            throw err;
+        }
+    });
+    
+    return singleConnection;
+}
+
+// Test the connection
+con.getConnection((err, connection) => {
+    if (err) {
+        console.error('❌ Database pool connection failed:', err.code);
+        handleDisconnect();
+    } else {
+        console.log('✅ Database pool connection successful');
+        connection.release();
+    }
+});
+
+// Handle pool errors
+con.on('error', function(err) {
+    console.error('❌ Database pool error:', err.code || err.message);
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        handleDisconnect();
+    } else {
+        throw err;
+    }
+});
 
 module.exports = con;
