@@ -1,332 +1,224 @@
 console.log('Node.js versie:', process.version);
 console.log('Discord.js versie:', require('discord.js').version);
 
-const discord = require("discord.js");
-const client = new discord.Client();
-client.commands = new discord.Collection();
-//const fetch = require("node-fetch"); // https://www.npmjs.com/package/node-fetch (Fetch data from URL)
-const cron = require("node-cron"); // https://www.npmjs.com/package/node-cron (Using Cronjobs)
+// Load environment variables FIRST
+require('dotenv').config();
+
+const { Client, GatewayIntentBits, Collection, EmbedBuilder, REST, Routes } = require('discord.js');
+const cron = require("node-cron");
 const con = require("./mysqlcon.js");
-const moment = require("moment"); // https://www.npmjs.com/package/moment (Date Formatting)
+const moment = require("moment");
 const tz = require("moment-timezone");
 const fs = require("fs");
-const {servername, prefix, token, channelids} = require("./config.json");
+
+// Client met intents
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildPresences,
+        GatewayIntentBits.DirectMessages
+    ]
+});
+
+// Collections voor commands
+client.commands = new Collection();
+client.slashCommands = new Collection();
+
+// Config object
+const config = {
+    token: process.env.DISCORD_TOKEN,
+    clientId: process.env.DISCORD_CLIENT_ID, // Voeg toe aan je .env
+    guildId: process.env.DISCORD_GUILD_ID,   // Voeg toe aan je .env (optioneel, voor guild-specific commands)
+    prefix: process.env.DISCORD_PREFIX || '!',
+    servername: process.env.SERVER_NAME || 'Friends',
+    channelids: {
+        AREA51_FRIENDS: process.env.CHANNEL_AREA51_FRIENDS,
+        BOTTESTKANAAL_FRIENDS: process.env.CHANNEL_BOTTESTKANAAL_FRIENDS,
+        BIRTHDAYS_FRIENDS: process.env.CHANNEL_BIRTHDAYS_FRIENDS,
+        ALGEMEEN_MICH: process.env.CHANNEL_ALGEMEEN_MICH,
+        LOGS_MICH: process.env.CHANNEL_LOGS_MICH,
+        TEST_MICH: process.env.CHANNEL_TEST_MICH,
+        RULES_MICH: process.env.CHANNEL_RULES_MICH
+    },
+    roles: {
+        Mute: process.env.ROLE_MUTE,
+        Lid: process.env.ROLE_LID
+    },
+    database: {
+        host: process.env.DB_HOST,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_DATABASE,
+        timezone: process.env.DB_TIMEZONE || 'Z'
+    }
+};
+
+// Quotes en activities
 const {poohQuotes, activities, slaapliedjes} = require("./quotes.json");
-client.login(token);
 
-const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
-
-for (const file of commandFiles) {
-	const command = require('./commands/' + file);
-	console.log(file + ' loaded');
-	client.commands.set(command.name, command);
+// Validatie
+if (!config.token) {
+    console.error('❌ DISCORD_TOKEN not found in environment variables!');
+    process.exit(1);
 }
 
+console.log('✅ Config loaded successfully');
+
+// Load commands (oude prefix commands - tijdelijk)
+const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
+for (const file of commandFiles) {
+    const command = require(`./commands/${file}`);
+    console.log(`${file} loaded`);
+    client.commands.set(command.name, command);
+}
+
+// Slash Commands registratie
+const slashCommands = [
+    {
+        name: 'ping',
+        description: 'Test de server response tijd'
+    },
+    {
+        name: 'serverinfo',
+        description: 'Toon server informatie'
+    },
+    {
+        name: 'help',
+        description: 'Toon alle beschikbare commands'
+    },
+    {
+        name: 'quote',
+        description: 'Random inspirational quote'
+    }
+];
+
+// Register slash commands
+async function registerSlashCommands() {
+    try {
+        console.log('Started refreshing application (/) commands.');
+        
+        const rest = new REST().setToken(config.token);
+        
+        if (config.guildId) {
+            // Guild-specific commands (sneller voor development)
+            await rest.put(
+                Routes.applicationGuildCommands(config.clientId, config.guildId),
+                { body: slashCommands }
+            );
+        } else {
+            // Global commands (langzamer, maar voor alle servers)
+            await rest.put(
+                Routes.applicationCommands(config.clientId),
+                { body: slashCommands }
+            );
+        }
+        
+        console.log('Successfully reloaded application (/) commands.');
+    } catch (error) {
+        console.error('Error registering slash commands:', error);
+    }
+}
+
+// Discord link deletion function
 function deleteDiscordLink(message) {
     var msg = message.content.trim();
     if (msg.toLowerCase().includes('discord.gg/') || msg.toLowerCase().includes('discordapp.com/invite/')) {
-        msgShortened = ((msg.length > 1900) ? msg.slice(0, 1900 - 3) + '...' : msg);
+        const msgShortened = ((msg.length > 1900) ? msg.slice(0, 1900 - 3) + '...' : msg);
         if (!message.guild) return;
-        if (!message.member.hasPermission('MANAGE_MESSAGES')) {
+        if (!message.member.permissions.has('ManageMessages')) {
             message.delete()
-            .then(message => {
-				message.author.send("Hey!\nJouw bericht met een link naar een andere Discord is automatisch verwijderd. Het is in " + servername + " namelijk niet toegestaan om reclame te maken voor een andere Discord. Je kunt de regels altijd nog even nalezen in het welcome-kanaal.\nDenk je dat jouw Discord een echte toevoeging is voor onze leden? Spreek dan even iemand van het Staff- of Moderatorteam aan om te overleggen wat de mogelijkheden zijn.\n\nDe " + servername + " Crew")
-                .then(() => {
-                    if (message.channel.type === 'dm') return;
-                })
+            .then(() => {
+                message.author.send(`Hey!\nJouw bericht met een link naar een andere Discord is automatisch verwijderd. Het is in ${config.servername} namelijk niet toegestaan om reclame te maken voor een andere Discord. Je kunt de regels altijd nog even nalezen in het welcome-kanaal.\nDenk je dat jouw Discord een echte toevoeging is voor onze leden? Spreek dan even iemand van het Staff- of Moderatorteam aan om te overleggen wat de mogelijkheden zijn.\n\nDe ${config.servername} Crew`)
                 .catch(error => {
-                    client.channels.cache.get(channelids.LOGS_MICH).send("DM kon niet worden verstuurd aan " + message.author.tag + " (" + message.author.id + ")\n" + error).catch(console.error);
-                    console.error("DM kon niet worden verstuurd aan " + message.author.tag + " (" + message.author.id + ")", error);
-                    return;
+                    if (config.channelids.LOGS_MICH) {
+                        client.channels.cache.get(config.channelids.LOGS_MICH).send(`DM kon niet worden verstuurd aan ${message.author.tag} (${message.author.id})\n${error}`).catch(console.error);
+                    }
+                    console.error(`DM kon niet worden verstuurd aan ${message.author.tag} (${message.author.id})`, error);
                 });
                 
-                var embed = new discord.MessageEmbed()
-                .setAuthor(message.author.tag + " (" + message.author.id + ")", message.author.avatarURL({size: 4096}))
-                .setDescription("Bericht " + message.id + " is verwijdert in <#" + message.channel + ">\n\n" + msgShortened)
+                const embed = new EmbedBuilder()
+                .setAuthor({name: `${message.author.tag} (${message.author.id})`, iconURL: message.author.displayAvatarURL({size: 4096})})
+                .setDescription(`Bericht ${message.id} is verwijderd in <#${message.channel.id}>\n\n${msgShortened}`)
                 .setTimestamp()
-                .setColor("RANDOM");
+                .setColor('Random');
                 
-                client.channels.cache.get(channelids.LOGS_MICH).send(embed).catch(console.error);
-            })
+                if (config.channelids.LOGS_MICH) {
+                    client.channels.cache.get(config.channelids.LOGS_MICH).send({embeds: [embed]}).catch(console.error);
+                }
+            });
         }
     }
 }
 
-/*
-Presence {
-  userID: '692352395375542284',
-  guild: <ref *1> Guild {
-    members: GuildMemberManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    },
-    channels: GuildChannelManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    },
-    roles: RoleManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    },
-    presences: PresenceManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]]
-    },
-    voiceStates: VoiceStateManager {
-      cacheType: [class Collection extends Collection],
-      cache: Collection(0) [Map] {},
-      guild: [Circular *1]
-    },
-    deleted: false,
-    available: true,
-    id: '724569053989044275',
-    shardID: 0,
-    name: 'Mich',
-    icon: 'b161b4628f3032e26d53b182aa601d50',
-    splash: null,
-    discoverySplash: null,
-    region: 'europe',
-    memberCount: 7,
-    large: false,
-    features: [ 'NEWS', 'COMMUNITY' ],
-    applicationID: null,
-    afkTimeout: 300,
-    afkChannelID: null,
-    systemChannelID: '724569054550949891',
-    embedEnabled: undefined,
-    premiumTier: 0,
-    premiumSubscriptionCount: 0,
-    verificationLevel: 'MEDIUM',
-    explicitContentFilter: 'ALL_MEMBERS',
-    mfaLevel: 0,
-    joinedTimestamp: 1609982800298,
-    defaultMessageNotifications: 'MENTIONS',
-    systemChannelFlags: SystemChannelFlags { bitfield: 7 },
-    maximumMembers: 250000,
-    maximumPresences: null,
-    approximateMemberCount: null,
-    approximatePresenceCount: null,
-    vanityURLCode: null,
-    vanityURLUses: null,
-    description: 'Test server',
-    banner: null,
-    rulesChannelID: '871401881333792818',
-    publicUpdatesChannelID: '871401881333792819',
-    preferredLocale: 'nl',
-    ownerID: '692352395375542284',
-    emojis: GuildEmojiManager {
-      cacheType: [class Collection extends Collection],
-      cache: Collection(0) [Map] {},
-      guild: [Circular *1]
-    }
-  },
-  status: 'idle',
-  activities: [
-    Activity {
-      name: 'Custom Status',
-      type: 'CUSTOM_STATUS',
-      url: null,
-      details: null,
-      state: 'ඞ when the status kinda sus',
-      applicationID: null,
-      timestamps: null,
-      party: null,
-      assets: null,
-      syncID: undefined,
-      flags: [ActivityFlags],
-      emoji: null,
-      createdTimestamp: 1629888527968
-    }
-  ],
-  clientStatus: { mobile: 'idle' }
-}
-Presence {
-  userID: '692352395375542284',
-  guild: <ref *1> Guild {
-    members: GuildMemberManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    },
-    channels: GuildChannelManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    },
-    roles: RoleManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    },
-    presences: PresenceManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]]
-    },
-    voiceStates: VoiceStateManager {
-      cacheType: [class Collection extends Collection],
-      cache: Collection(0) [Map] {},
-      guild: [Circular *1]
-    },
-    deleted: false,
-    available: true,
-    id: '795762672992911390',
-    shardID: 0,
-    name: 'Friends',
-    icon: 'e568b8c3624d2929ff11a89124371a79',
-    splash: null,
-    discoverySplash: null,
-    region: 'europe',
-    memberCount: 5,
-    large: false,
-    features: [],
-    applicationID: null,
-    afkTimeout: 300,
-    afkChannelID: null,
-    systemChannelID: '795762672992911392',
-    embedEnabled: undefined,
-    premiumTier: 0,
-    premiumSubscriptionCount: 0,
-    verificationLevel: 'NONE',
-    explicitContentFilter: 'DISABLED',
-    mfaLevel: 0,
-    joinedTimestamp: 1609952119734,
-    defaultMessageNotifications: 'ALL',
-    systemChannelFlags: SystemChannelFlags { bitfield: 0 },
-    maximumMembers: 250000,
-    maximumPresences: null,
-    approximateMemberCount: null,
-    approximatePresenceCount: null,
-    vanityURLCode: null,
-    vanityURLUses: null,
-    description: null,
-    banner: null,
-    rulesChannelID: null,
-    publicUpdatesChannelID: null,
-    preferredLocale: 'en-US',
-    ownerID: '692344575192334356',
-    emojis: GuildEmojiManager {
-      cacheType: [class Collection extends Collection],
-      cache: [Collection [Map]],
-      guild: [Circular *1]
-    }
-  },
-  status: 'idle',
-  activities: [
-    Activity {
-      name: 'Custom Status',
-      type: 'CUSTOM_STATUS',
-      url: null,
-      details: null,
-      state: 'ඞ when the status kinda sus',
-      applicationID: null,
-      timestamps: null,
-      party: null,
-      assets: null,
-      syncID: undefined,
-      flags: [ActivityFlags],
-      emoji: null,
-      createdTimestamp: 1629888527968
-    }
-  ],
-  clientStatus: { mobile: 'idle' }
-}
-*/
-
+// Presence update handler
 client.on("presenceUpdate", (oldPresence, newPresence) => {
     if (!newPresence.activities) return;
-    if (newPresence.guild.id != 795762672992911390) return;
-    //if (oldPresence.status == newPresence.status) return;
-    var embed = new discord.MessageEmbed();
+    if (newPresence.guild.id != '795762672992911390') return;
+    
     newPresence.activities.forEach(activity => {
-        /*
-        console.log('===========================')
-        console.log('User tag' + newPresence.user.tag)
-        console.log('Username' + newPresence.user.username)
-        console.log('UserID ' + newPresence.userID)
-        console.log('Status ' + newPresence.status)
-        console.log('Icon ' + newPresence.guild.icon)
-        console.log('Channel ID ' + newPresence.guild.id)
-        console.log('Channel Name ' + newPresence.guild.name)
-        console.log('Activity name ' + activity.name)
-        console.log('Activity type ' + activity.type)     
-        console.log('Activity state ' + activity.state)
-        console.log('===========================')
-        */
-		if (activity.type == "STREAMING") {
-			console.log('==oldPresence=========================')
-            console.log(oldPresence);
-        	console.log('--newPresence-------------------------')
-            console.log(newPresence);
-        	console.log('--activity-------------------------')
-            console.log(activity);
-        	console.log('==einde=========================')
-			// msg.channel.send(msg.guild.defaultRole.toString());
-            var embed = new discord.MessageEmbed()
-                .setAuthor(newPresence.user.username + " is nu live! 📹", newPresence.user.avatarURL())
+        if (activity.type == "Streaming") {
+            console.log('Streaming detected:', newPresence.user.tag);
+            
+            const embed = new EmbedBuilder()
+                .setAuthor({name: `${newPresence.user.username} is nu live! 📹`, iconURL: newPresence.user.displayAvatarURL()})
                 .setTitle(activity.details ? activity.details : '\u200B')
                 .setURL(activity.url)
-            	.addField('Speelt 🎮', activity.state ? '['+activity.state+'](https://www.twitch.tv/directory/game/'+encodeURIComponent(activity.state)+')' : '[Just Chatting](https://www.twitch.tv/directory/game/Just%20Chatting)')
-            	.setThumbnail(newPresence.user.avatarURL())
+                .addFields({name: 'Speelt 🎮', value: activity.state ? `[${activity.state}](https://www.twitch.tv/directory/game/${encodeURIComponent(activity.state)})` : '[Just Chatting](https://www.twitch.tv/directory/game/Just%20Chatting)'})
+                .setThumbnail(newPresence.user.displayAvatarURL())
                 .setTimestamp()
-                .setFooter(newPresence.guild.name, newPresence.guild.iconURL({size: 4096}))
-                .setColor("PURPLE");
-             // client.channels.cache.get(channelids.LOGS_MICH).send("@everyone", embed).catch(console.error);
-			client.channels.cache.get(channelids.AREA51_FRIENDS).send("@everyone", embed).catch(console.error);
-		}
+                .setFooter({text: newPresence.guild.name, iconURL: newPresence.guild.iconURL({size: 4096})})
+                .setColor('Purple');
+                
+            if (config.channelids.AREA51_FRIENDS) {
+                client.channels.cache.get(config.channelids.AREA51_FRIENDS).send({content: '@everyone', embeds: [embed]}).catch(console.error);
+            }
+        }
     });
 });
 
+// Message delete handler
 client.on("messageDelete", messageDelete => {
+    if(messageDelete.author?.bot) return;
 
-    if(messageDelete.author.bot) return;
-
-    var embed = new discord.MessageEmbed()
-    .setAuthor(messageDelete.author.tag + " (" + messageDelete.author.id + ")", messageDelete.author.avatarURL({size: 4096}))
-    .setDescription("Bericht " + messageDelete.id + " is verwijdert in <#" + messageDelete.channel + ">\n\n" + messageDelete.content)
+    const embed = new EmbedBuilder()
+    .setAuthor({name: `${messageDelete.author.tag} (${messageDelete.author.id})`, iconURL: messageDelete.author.displayAvatarURL({size: 4096})})
+    .setDescription(`Bericht ${messageDelete.id} is verwijderd in <#${messageDelete.channel.id}>\n\n${messageDelete.content}`)
     .setTimestamp()
-    .setColor("RANDOM");
+    .setColor('Random');
 
-    //client.channels.cache.get(channelids.LOGS_MICH).send(embed);
-
-    messageDelete.client.users.cache.get("692352395375542284").send(embed)
-        .then(() => {
-            if (messageDelete.channel.type === 'dm') return;
-        })
+    messageDelete.client.users.cache.get("692352395375542284")?.send({embeds: [embed]})
         .catch(error => {
             console.error('Could not send DM', error);
         });
 });
 
+// Message update handler
 client.on("messageUpdate", async(oldMessage, newMessage) => {
-
-    if(newMessage.author.bot) return;
-
+    if(newMessage.author?.bot) return;
     if(oldMessage.content == newMessage.content) return;
     
     deleteDiscordLink(newMessage);
 
-    var embed = new discord.MessageEmbed()
-        .setAuthor(newMessage.author.tag + " (" + newMessage.author.id + ")", newMessage.author.avatarURL({size: 4096}))
-        .setDescription("Bericht " + newMessage.id + " is bewerkt in <#" + newMessage.channel + ">\n\n**Oud bericht:** " + oldMessage.content + "\n**Nieuw bericht:** " + newMessage.content)
+    const embed = new EmbedBuilder()
+        .setAuthor({name: `${newMessage.author.tag} (${newMessage.author.id})`, iconURL: newMessage.author.displayAvatarURL({size: 4096})})
+        .setDescription(`Bericht ${newMessage.id} is bewerkt in <#${newMessage.channel.id}>\n\n**Oud bericht:** ${oldMessage.content}\n**Nieuw bericht:** ${newMessage.content}`)
         .setTimestamp()
-        .setColor("RANDOM");
+        .setColor('Random');
 
-    //client.channels.cache.get(channelids.LOGS_MICH).send(embed);
-
-    newMessage.client.users.cache.get("692352395375542284").send(embed)
-        .then(() => {
-            if (newMessage.channel.type === 'dm') return;
-        })
+    newMessage.client.users.cache.get("692352395375542284")?.send({embeds: [embed]})
         .catch(error => {
             console.error('Could not send DM', error);
         });
 });
+
+// Birthday function
 function sendBirthday() {
-    var TimeZone = 'Europe/Amsterdam';
-    var now = moment().tz(TimeZone).format("HH:mm");
+    const TimeZone = 'Europe/Amsterdam';
+    const now = moment().tz(TimeZone).format("HH:mm");
     
     if(now == "02:00") {
         console.log("Birthday check...");
@@ -335,27 +227,23 @@ function sendBirthday() {
             if(err) throw err;
             if(result.length > 0){
                 Object.keys(result).forEach(function(key) {
-                    var birthdaylist = "";
-                    var row = result[key];
-
-                    birthdaylist += "Gefeliciteerd met je " + row.Age + "e verjaardag " + row.Username;
-                    if(row.UserID > 0) birthdaylist += " <@" + row.UserID + ">";
+                    const row = result[key];
+                    let birthdaylist = `Gefeliciteerd met je ${row.Age}e verjaardag ${row.Username}`;
+                    if(row.UserID > 0) birthdaylist += ` <@${row.UserID}>`;
                     birthdaylist += "!\n";
 
-
-                    var embed = new discord.MessageEmbed()
+                    const embed = new EmbedBuilder()
                         .setTitle("Happy Birthday :partying_face:")
-                        .addField("\u200b", birthdaylist)
-                        .setFooter(client.user.username, client.user.displayAvatarURL())
-                        .setColor("RANDOM")
-                    	.attachFiles(['img/balloons64.png'])
-            			.setThumbnail('attachment://balloons64.png');
-
+                        .addFields({name: '\u200b', value: birthdaylist})
+                        .setFooter({text: client.user.username, iconURL: client.user.displayAvatarURL()})
+                        .setColor('Random')
+                        .setThumbnail('attachment://balloons64.png');
 
                     console.log("Run Birthday " + moment().tz('Europe/Amsterdam').format('DD-MM-YYYY HH:mm:ss'));
 
-                    client.channels.cache.get(channelids.BIRTHDAYS_FRIENDS).send(embed);
-                    //client.channels.cache.get(channelids.ALGEMEEN_MICH).send(embed);
+                    if (config.channelids.BIRTHDAYS_FRIENDS) {
+                        client.channels.cache.get(config.channelids.BIRTHDAYS_FRIENDS).send({embeds: [embed], files: ['img/balloons64.png']});
+                    }
                 });
             }
         });
@@ -363,204 +251,168 @@ function sendBirthday() {
 }
 setInterval(sendBirthday, 60000);
 
-var activity;
+// Activity changer
+let activity;
+function changeActivity(){
+    activity = activities[Math.floor(Math.random() * activities.length)];
+    
+    client.user.setPresence({
+        status: "online",
+        activities: [{
+            name: activity,
+            type: 0 // PLAYING
+        }]
+    });
+    console.log("Activity changed " + moment().tz('Europe/Amsterdam').format('DD-MM-YYYY HH:mm:ss'));
+    setTimeout(changeActivity, 1800000); // 30 minutes
+}
 
-client.on("ready", async () => {
-    console.log(client.user.username + " is online.");
+// Ready event
+client.on("clientReady", async () => {
+    console.log(`${client.user.username} is online!`);
+    
+    // Register slash commands
+    if (config.clientId) {
+        await registerSlashCommands();
+    } else {
+        console.warn('⚠️ CLIENT_ID not set, skipping slash command registration');
+    }
+    
     changeActivity();
-    function changeActivity(){
-        activity = activities[Math.floor(Math.random() * activities.length)];
+});
+
+// Slash command handler
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+
+    const { commandName } = interaction;
+
+    try {
+        switch(commandName) {
+            case 'ping':
+                await interaction.reply(`Pong! ${Date.now() - interaction.createdTimestamp}ms`);
+                break;
+                
+            case 'serverinfo':
+                const guild = interaction.guild;
+                const memberCount = guild.memberCount;
+                const bots = guild.members.cache.filter(m => m.user.bot).size;
+                const peoples = memberCount - bots;
+                const online = guild.members.cache.filter(m => ['online', 'dnd', 'idle'].includes(m.presence?.status)).size;
+                
+                const embed = new EmbedBuilder()
+                    .setTitle("Server Info")
+                    .setThumbnail(guild.iconURL())
+                    .setDescription(`${guild.name}'s information`)
+                    .addFields(
+                        {name: "Owner", value: `<@${guild.ownerId}>`, inline: true},
+                        {name: "Member Count", value: memberCount.toString(), inline: true},
+                        {name: "Peoples", value: peoples.toString(), inline: true},
+                        {name: "Bots", value: bots.toString(), inline: true},
+                        {name: "Online", value: online.toString(), inline: true},
+                        {name: "Emoji Count", value: `${guild.emojis.cache.size} emojis`, inline: true},
+                        {name: "Roles Count", value: `${guild.roles.cache.size} roles`, inline: true},
+                        {name: "Created", value: moment(guild.createdAt).format("DD-MM-YYYY HH:mm"), inline: true},
+                        {name: "ID", value: guild.id, inline: true}
+                    )
+                    .setColor('Random');
+                    
+                await interaction.reply({embeds: [embed]});
+                break;
+                
+            case 'help':
+                const helpEmbed = new EmbedBuilder()
+                    .setTitle("Help - Slash Commands")
+                    .setDescription("Beschikbare slash commands:")
+                    .addFields(
+                        {name: "/ping", value: "Test de server response tijd"},
+                        {name: "/serverinfo", value: "Toon server informatie"},  
+                        {name: "/help", value: "Toon deze help"},
+                        {name: "/quote", value: "Random inspirational quote"}
+                    )
+                    .setThumbnail(client.user.displayAvatarURL())
+                    .setFooter({text: interaction.guild.name, iconURL: interaction.guild.iconURL()})
+                    .setColor('Random');
+                    
+                await interaction.reply({embeds: [helpEmbed]});
+                break;
+                
+            case 'quote':
+                await interaction.reply(`**"${activity}"**`);
+                break;
+                
+            default:
+                await interaction.reply('Deze command is nog niet geïmplementeerd!');
+        }
+    } catch (error) {
+        console.error('Slash command error:', error);
+        const errorReply = 'Er is een fout opgetreden bij het uitvoeren van deze command!';
         
-        client.user.setPresence({
-            status: "online",  // online, dnd, invisible, idle
-            activity: {
-                name: activity,
-                type: "PLAYING" // PLAYING STREAMING LISTENING WATCHING CUSTOM_STATUS COMPETING
-            }
-        });
-        console.log("Activity changed " + moment().tz('Europe/Amsterdam').format('DD-MM-YYYY HH:mm:ss'));
-        setTimeout(changeActivity, 1800000); // 300000 = 5minutes
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp(errorReply);
+        } else {
+            await interaction.reply(errorReply);
+        }
     }
 });
 
-client.on("message", async message =>{
-
-    //const args = message.content.trim.split(/ +/);
-    var msg = message.content.trim();
-    const args = msg.slice(prefix.length).split(/ +/);
-    const command = args.shift().toLowerCase();
-    const commands = client.commands.get(command) || client.commands.find(cmd => cmd.aliases && cmd.aliases.includes(command));
-    msg = msg.toLowerCase();
+// Legacy message handler (tijdelijk voor oude commands)
+client.on("messageCreate", async message => {
+    if(message.author.bot) return;
     
-	deleteDiscordLink(message);
+    const msg = message.content.trim().toLowerCase();
+    deleteDiscordLink(message);
     
-    if(message.channel.id === channelids.ALGEMEEN_MICH){
-        const eachLine = message['content'].split('\n')
+    // Auto react voor polls
+    if(message.channel.id === config.channelids.ALGEMEEN_MICH){
+        const eachLine = message.content.split('\n');
         for(const line of eachLine) {
             if(line.includes('=')) {
-                const split = line.split('=')
-                const emoji = split[0].trim()
+                const split = line.split('=');
+                const emoji = split[0].trim();
                 try {
-                	await message.react(emoji)
+                    await message.react(emoji);
                 } catch (error) {
-					//console.error('One of the emojis failed to react:', error);
+                    // Emoji failed
                 }
-			}
+            }
         }
     }
     
-    // Respond on bot
-    if(message.author.bot) {
-        if(msg.includes("ik ben de mol")){
-            return message.channel.send(`Ik wist het ${message.author.username}!`);
-        }
-        else if(msg.includes("berend") && (msg.includes("hallo") || msg.includes("hoi") || msg.includes("hey"))){
-            return message.channel.send(`Hey ${message.author.username}!`);
-        }
-        return;
-    }
-    
+    // Bot mentions
     if(message.mentions.has(client.user)) {
         if(msg.includes("hallo") || msg.includes("hoi") || msg.includes("hey")){
-			return message.channel.send(`Hallo ${message.author.username}! :wave:`);
-		}
-		else if(msg.includes("welteruste") || msg.includes("truste") || (msg.includes("slaap") && msg.includes("lekker"))){
-            return message.channel.send(`Slaap lekker ${message.author.username}! :sleeping_accommodation:`);
+            return message.channel.send(`Hallo ${message.author.username}! :wave:`);
         }
-        else if(msg.includes("dag") || msg.includes("doei") || msg.includes("tot ziens")){
-            return message.channel.send(`Fijne dag ${message.author.username}! Tot de volgende keer! :wave:`);
-        }
-        else if(msg.includes("goedemorg") || msg.includes("morning")){
-            return message.channel.send(`Goedemorgen ${message.author.username}! :coffee:`)
-        }
+        // ... andere mentions
     }
-    /*
-    if(msg.includes("hoe is") || msg.includes("hoe gaat")) {
-        return message.channel.send(`Met mij gaat alles goed hoor! :relaxed: En met jou ${message.author.username}?`).then(async msg =>{
-            
-            /*
-            var emoji = await promptMessage(msg, message.author, 30, ["✅", "❌"]);
-            
-            if(emoji === "✅"){
-                
-                msg.delete();
-                
-                message.channel.send("Yes!");
-            } else if(emoji === "❌"){
-                
-                msg.delete();
-                
-                message.reply("Jammer").then(m => m.delete({timeout: 5000}));
-            }
-            */
-            /*
-            message.channel.awaitMessages(m => m.author.id === message.author.id, {max: 1, time: 30000, errors: ['time']}).then(collected =>{
-                    var c = collected.first().content.toLowerCase();
-                    if(c.includes("goed") || c.includes("ja") || c.includes("prima") || c.includes("best") || c.includes("uitstekend")) {
-                        return message.channel.send(`Mooi zo :relaxed:`);
-                    }
-                    else {
-                        return message.channel.send(`Niet zo goed? :worried:`).then(async msg =>{
-                        
-                            message.channel.awaitMessages(m => m.author.id === message.author.id, {max: 1, time: 30000, errors: ['time']}).then(collected =>{
-                                var c = collected.first().content.toLowerCase();
-                                if(c.includes("nee") || c.includes("nope") || c.includes("idd") || c.includes("inderdaad") || c.includes("klopt")) {
-                                    return message.channel.send(`Oh jeej! Hopelijk gaat het snel weer beter! :hugging:`);
-                                } else {
-                                    return message.channel.send(`Dat antwoord begrijp ik nog niet.`);
-                                }
-                            });
-                        });
-                    }
-            }).catch(collected => message.channel.send(`Ik heb geen antwoord gekregen ${message.author.username} :worried:`));
-        });
-    }
-    else
-    */
-    if(command ===  "quote"){
-        return message.channel.send(`${activity}`);
-    }
-    else if(msg.includes("pedro") && command != "pedro") {
-        return message.channel.send({ files: ["./img/pedro.gif"] });
-    }
-    else if(msg.includes("berend")){
-        return message.channel.send("Dat ben ik! :blush:");
-    }
-    else if(msg.includes("hallo") || msg.includes("hoi") || msg.includes("hey") || msg.includes("hai")){
-        return message.channel.send(`Hey ${message.author.username}! :wave:`);
-    }
-    else if(msg.includes("slaapliedje")){
-        var slaapliedje = slaapliedjes[Math.floor(Math.random() * slaapliedjes.length)];
-        return message.channel.send(`*${slaapliedje}*`);
-    }
-    else if(msg.includes("pooh") || msg.includes("poeh")){
-        var quote = poohQuotes[Math.floor(Math.random() * poohQuotes.length)];
-        var embed = new discord.MessageEmbed()
-            .setDescription(`**${quote}**`)
-            .setColor("RANDOM")
-			.attachFiles(['img/pooh.png'])
-			.setThumbnail('attachment://pooh.png')
-        	.setFooter("Silly Old Bear 🐻🍯", "");
-        return message.channel.send(embed).catch(err => {
-            console.log(err);
-        });
-    }
-    else if(msg.includes("lol")){
-        return message.channel.send(`Ik vind het ook erg grappig! :grin:`);
-    }
-    else if(msg.includes("tempa") || msg.includes("temptation")){
-        return message.channel.send(`Gaat het nou alweer over temptation island? :tired_face:`);
-    }
-    //else if(msg.includes("de mol")){
-    //    return message.channel.send("Rusty is de mol! :face_with_hand_over_mouth:")
-    //}
-    /*
-    else if(msg.startsWith("test")){
-        //message.react('bla bla');
-        return message.channel.send(`blablabla`)
-        .then(function (message) {
-              message.react("👍")
-              message.react("👎")
-              //message.pin()
-              //message.delete()
-            }).catch(function() {
-              //Something
-             });
-    }
-    */
     
-    if(message.channel.type == "dm") {
-        if(!message.author.bot) return message.author.send("Sorry " + message.author.username + ", ik houd niet van privégesprekken :flushed:");
-    }
-    if(message.author.id === client.user.id) return;
-    if(!msg.startsWith(prefix) || message.author.bot) return;
-	if (!commands) return;
-	
+    // Legacy prefix commands (tijdelijk)
+    if(!msg.startsWith(config.prefix)) return;
+    
+    const args = msg.slice(config.prefix.length).split(/ +/);
+    const command = args.shift().toLowerCase();
+    const commands = client.commands.get(command) || client.commands.find(cmd => cmd.aliases && cmd.aliases.includes(command));
+    
+    if (!commands) return;
+    
+    // Permission check
     if(commands.permissions){
- 	    const authorPerms = message.channel.permissionsFor(message.author);
- 	    if(!authorPerms || !authorPerms.has(commands.permissions)){
+        const authorPerms = message.channel.permissionsFor(message.author);
+        if(!authorPerms || !authorPerms.has(commands.permissions)){
             return message.reply('Je hebt niet de juiste permissies om dit command te kunnen gebruiken').then(msg => {
-                msg.delete({ timeout: 20000 })
+                setTimeout(() => msg.delete().catch(console.error), 20000);
             }).catch(console.error);
         }
     }
     
     try {
-		commands.execute(message, args);
-	} catch (error) {
-		console.error(error);
-		return message.reply('there was an error trying to execute that command!');
-	}
+        commands.execute(message, args);
+    } catch (error) {
+        console.error(error);
+        return message.reply('Er is een fout opgetreden bij het uitvoeren van die command!');
+    }
 });
 
-async function promptMessage(message, author, time, reactions){
-    time *= 1000;
-    
-    for(const reaction of reactions){
-        await message.react(reaction);
-    }
-    
-    var filter = (reaction, user) => reactions.includes(reaction.emoji.name) && user.id === author.id;
-    
-    return message.awaitReactions(filter, {max:1, time: time}).then(collected => collected.first() && collected.first().emoji.name);
-}
+// Login
+client.login(config.token);
