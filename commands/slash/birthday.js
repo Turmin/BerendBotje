@@ -4,7 +4,7 @@ const con = require('../../mysqlcon.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
-        .setName('bday')
+        .setName('birthday')
         .setDescription('Beheer verjaardagen')
         .addSubcommand(subcommand =>
             subcommand

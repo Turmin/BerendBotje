@@ -1,22 +1,22 @@
-//const discord = require("discord.js");
-//const moment = require("moment");
-//const tz = require("moment-timezone");
-//moment.locale('nl');
-//const con = require("../mysqlcon.js");
-//const {channelids} = require("../config.json");
+// 1. Deferred replies voor lange operaties
+await interaction.deferReply();
+await interaction.editReply('Result!');
 
-module.exports = {
-	name: '!example',
-	//aliases: ['!foo', '!bar'],
-	permissions: 'KICK_MEMBERS', // https://discord.js.org/#/docs/main/stable/class/Permissions?scrollTo=s-FLAGS
-	execute(message, args) {
+// 2. Ephemeral replies voor errors
+await interaction.reply({ content: 'Error!', ephemeral: true });
 
-        const command = message.content.toLowerCase().split(/ +/).shift();
-		//const content = message.content.slice(command.length).trim();
-		//of
-		const content = args.join(" ");
-		if(content == "") return message.reply("Je hebt geen bericht meegegeven.");
-		return message.reply("Bericht: " + content);
+// 3. Permission checks
+if (!interaction.member.permissions.has('ManageMessages')) {
+    // deny
+}
 
-	},
-};
+// 4. Subcommands
+// .addSubcommand(sub => sub.setName('add').setDescription('...'))
+
+// 5. Error handling met try/catch
+try {
+    // risky operation
+} catch (error) {
+    console.error('Error:', error);
+    await interaction.reply('Something went wrong!');
+}

@@ -8,7 +8,7 @@ module.exports = {
         try {
             await interaction.reply({ 
                 files: ["./img/pedro.gif"],
-                content: "Pedro! 🐸"
+                content: "Pedro! 🦝"
             });
         } catch (error) {
             console.error('Pedro command error:', error);

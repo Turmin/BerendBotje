@@ -4,7 +4,7 @@ console.log('Discord.js versie:', require('discord.js').version);
 // Load environment variables FIRST
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, Collection, EmbedBuilder, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const cron = require("node-cron");
 const con = require("./mysqlcon.js");
 const moment = require("moment");
@@ -31,8 +31,8 @@ client.slashCommands = new Collection();
 // Config object
 const config = {
     token: process.env.DISCORD_TOKEN,
-    clientId: process.env.DISCORD_CLIENT_ID, // Voeg toe aan je .env
-    guildId: process.env.DISCORD_GUILD_ID,   // Voeg toe aan je .env (optioneel, voor guild-specific commands)
+    clientId: process.env.DISCORD_CLIENT_ID,
+    guildId: process.env.DISCORD_GUILD_ID,
     prefix: process.env.DISCORD_PREFIX || '!',
     servername: process.env.SERVER_NAME || 'Friends',
     channelids: {
@@ -68,38 +68,52 @@ if (!config.token) {
 
 console.log('✅ Config loaded successfully');
 
-// Load commands (oude prefix commands - tijdelijk)
-const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
-for (const file of commandFiles) {
-    const command = require(`./commands/${file}`);
-    console.log(`${file} loaded`);
-    client.commands.set(command.name, command);
+// Load slash commands dynamically
+const slashCommandsArray = [];
+
+// Check if slash commands directory exists
+if (fs.existsSync('./commands/slash')) {
+    const slashCommandFiles = fs.readdirSync('./commands/slash').filter(file => file.endsWith('.js'));
+
+    for (const file of slashCommandFiles) {
+        try {
+            const command = require(`./commands/slash/${file}`);
+            console.log(`✅ Slash command ${file} loaded`);
+            client.slashCommands.set(command.data.name, command);
+            slashCommandsArray.push(command.data.toJSON());
+        } catch (error) {
+            console.error(`❌ Error loading slash command ${file}:`, error.message);
+        }
+    }
+} else {
+    console.warn('⚠️ ./commands/slash directory not found');
 }
 
-// Slash Commands registratie
-const slashCommands = [
-    {
-        name: 'ping',
-        description: 'Test de server response tijd'
-    },
-    {
-        name: 'serverinfo',
-        description: 'Toon server informatie'
-    },
-    {
-        name: 'help',
-        description: 'Toon alle beschikbare commands'
-    },
-    {
-        name: 'quote',
-        description: 'Random inspirational quote'
+// Load legacy prefix commands (tijdelijk)
+if (fs.existsSync('./commands/legacy')) {
+    const commandFiles = fs.readdirSync('./commands/legacy').filter(file => file.endsWith('.js'));
+    for (const file of commandFiles) {
+        try {
+            const command = require(`./commands/legacy/${file}`);
+            console.log(`📄 Legacy command ${file} loaded`);
+            client.commands.set(command.name, command);
+        } catch (error) {
+            console.error(`❌ Error loading legacy command ${file}:`, error.message);
+        }
     }
-];
+}
+
+console.log(`📊 Loaded ${client.slashCommands.size} slash commands and ${client.commands.size} legacy commands`);
 
 // Register slash commands
 async function registerSlashCommands() {
+    if (slashCommandsArray.length === 0) {
+        console.warn('⚠️ No slash commands to register');
+        return;
+    }
+
     try {
-        console.log('Started refreshing application (/) commands.');
+        console.log(`🔄 Started refreshing ${slashCommandsArray.length} application (/) commands.`);
         
         const rest = new REST().setToken(config.token);
         
@@ -107,19 +121,20 @@ async function registerSlashCommands() {
             // Guild-specific commands (sneller voor development)
             await rest.put(
                 Routes.applicationGuildCommands(config.clientId, config.guildId),
-                { body: slashCommands }
+                { body: slashCommandsArray }
             );
+            console.log(`✅ Successfully reloaded ${slashCommandsArray.length} guild (/) commands.`);
         } else {
             // Global commands (langzamer, maar voor alle servers)
             await rest.put(
                 Routes.applicationCommands(config.clientId),
-                { body: slashCommands }
+                { body: slashCommandsArray }
             );
+            console.log(`✅ Successfully reloaded ${slashCommandsArray.length} global (/) commands.`);
         }
         
-        console.log('Successfully reloaded application (/) commands.');
     } catch (error) {
-        console.error('Error registering slash commands:', error);
+        console.error('❌ Error registering slash commands:', error);
     }
 }
 
@@ -281,77 +296,31 @@ client.on("clientReady", async () => {
     changeActivity();
 });
 
-// Slash command handler
+// Slash command handler - NIEUWE VERSIE
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
-    const { commandName } = interaction;
+    const command = client.slashCommands.get(interaction.commandName);
+
+    if (!command) {
+        console.error(`❌ No command matching ${interaction.commandName} was found.`);
+        await interaction.reply({
+            content: 'Deze command bestaat niet of is niet geladen!',
+            ephemeral: true
+        });
+        return;
+    }
 
     try {
-        switch(commandName) {
-            case 'ping':
-                await interaction.reply(`Pong! ${Date.now() - interaction.createdTimestamp}ms`);
-                break;
-                
-            case 'serverinfo':
-                const guild = interaction.guild;
-                const memberCount = guild.memberCount;
-                const bots = guild.members.cache.filter(m => m.user.bot).size;
-                const peoples = memberCount - bots;
-                const online = guild.members.cache.filter(m => ['online', 'dnd', 'idle'].includes(m.presence?.status)).size;
-                
-                const embed = new EmbedBuilder()
-                    .setTitle("Server Info")
-                    .setThumbnail(guild.iconURL())
-                    .setDescription(`${guild.name}'s information`)
-                    .addFields(
-                        {name: "Owner", value: `<@${guild.ownerId}>`, inline: true},
-                        {name: "Member Count", value: memberCount.toString(), inline: true},
-                        {name: "Peoples", value: peoples.toString(), inline: true},
-                        {name: "Bots", value: bots.toString(), inline: true},
-                        {name: "Online", value: online.toString(), inline: true},
-                        {name: "Emoji Count", value: `${guild.emojis.cache.size} emojis`, inline: true},
-                        {name: "Roles Count", value: `${guild.roles.cache.size} roles`, inline: true},
-                        {name: "Created", value: moment(guild.createdAt).format("DD-MM-YYYY HH:mm"), inline: true},
-                        {name: "ID", value: guild.id, inline: true}
-                    )
-                    .setColor('Random');
-                    
-                await interaction.reply({embeds: [embed]});
-                break;
-                
-            case 'help':
-                const helpEmbed = new EmbedBuilder()
-                    .setTitle("Help - Slash Commands")
-                    .setDescription("Beschikbare slash commands:")
-                    .addFields(
-                        {name: "/ping", value: "Test de server response tijd"},
-                        {name: "/serverinfo", value: "Toon server informatie"},  
-                        {name: "/help", value: "Toon deze help"},
-                        {name: "/quote", value: "Random inspirational quote"}
-                    )
-                    .setThumbnail(client.user.displayAvatarURL())
-                    .setFooter({text: interaction.guild.name, iconURL: interaction.guild.iconURL()})
-                    .setColor('Random');
-                    
-                await interaction.reply({embeds: [helpEmbed]});
-                break;
-                
-            case 'quote':
-                await interaction.reply(`**"${activity}"**`);
-                break;
-                
-            default:
-                await interaction.reply('Deze command is nog niet geïmplementeerd!');
-        }
+        await command.execute(interaction);
     } catch (error) {
-        console.error('Slash command error:', error);
+        console.error(`❌ Error executing slash command ${interaction.commandName}:`, error);
         const errorReply = 'Er is een fout opgetreden bij het uitvoeren van deze command!';
         
         if (interaction.replied || interaction.deferred) {
-            await interaction.followUp(errorReply);
+            await interaction.followUp({ content: errorReply, ephemeral: true });
         } else {
-            await interaction.reply(errorReply);
+            await interaction.reply({ content: errorReply, ephemeral: true });
         }
     }
 });
@@ -384,7 +353,47 @@ client.on("messageCreate", async message => {
         if(msg.includes("hallo") || msg.includes("hoi") || msg.includes("hey")){
             return message.channel.send(`Hallo ${message.author.username}! :wave:`);
         }
-        // ... andere mentions
+        else if(msg.includes("welterusten") || msg.includes("truste") || (msg.includes("slaap") && msg.includes("lekker"))){
+            return message.channel.send(`Slaap lekker ${message.author.username}! :sleeping_accommodation:`);
+        }
+        else if(msg.includes("dag") || msg.includes("doei") || msg.includes("tot ziens")){
+            return message.channel.send(`Fijne dag ${message.author.username}! Tot de volgende keer! :wave:`);
+        }
+        else if(msg.includes("goedemorg") || msg.includes("morning")){
+            return message.channel.send(`Goedemorgen ${message.author.username}! :coffee:`);
+        }
+    }
+    
+    // Word triggers (zonder mention)
+    if(msg.includes("pedro") && !msg.startsWith(config.prefix + "pedro")) {
+        return message.channel.send({ files: ["./img/pedro.gif"] });
+    }
+    else if(msg.includes("berend")){
+        return message.channel.send("Dat ben ik! :blush:");
+    }
+    else if(msg.includes("hallo") || msg.includes("hoi") || msg.includes("hey") || msg.includes("hai")){
+        return message.channel.send(`Hey ${message.author.username}! :wave:`);
+    }
+    else if(msg.includes("slaapliedje")){
+        const slaapliedje = slaapliedjes[Math.floor(Math.random() * slaapliedjes.length)];
+        return message.channel.send(`*${slaapliedje}*`);
+    }
+    else if(msg.includes("pooh") || msg.includes("poeh")){
+        const quote = poohQuotes[Math.floor(Math.random() * poohQuotes.length)];
+        const embed = new EmbedBuilder()
+            .setDescription(`**${quote}**`)
+            .setColor('Random')
+            .setThumbnail('attachment://pooh.png')
+            .setFooter({text: "Silly Old Bear 🐻🍯"});
+        return message.channel.send({embeds: [embed], files: ['./img/pooh.png']}).catch(err => {
+            console.log(err);
+        });
+    }
+    else if(msg.includes("lol")){
+        return message.channel.send(`Ik vind het ook erg grappig! :grin:`);
+    }
+    else if(msg.includes("tempa") || msg.includes("temptation")){
+        return message.channel.send(`Gaat het nou alweer over temptation island? :tired_face:`);
     }
     
     // Legacy prefix commands (tijdelijk)
